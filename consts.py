@@ -3,7 +3,7 @@
 
 from scipy.constants import physical_constants
 
-c = physical_constants['speed of light in vacuum'][0]  # m/s
+c = physical_constants['speed of light in vacuum'][0]  # m*s^-1
 hbar = physical_constants['reduced Planck constant'][0]  # J*s
 e = physical_constants['elementary charge'][0]  # C
 m_e = physical_constants['electron mass'][0]  # kg
