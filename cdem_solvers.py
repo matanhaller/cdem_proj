@@ -118,7 +118,7 @@ class CDEMSolver(object):
         # Normalizing w.r.t energy (E [eV] = hbar * omega / e)
         psi_coherent_norm = np.sqrt(trapezoid(np.abs(psi_coherent) ** 2,
                                               dx=self._d_omega, axis=1)
-                                    * e / hbar)
+                                    * hbar / e)
 
         return psi_coherent / np.reshape(psi_coherent_norm,
                                          (len(psi_coherent_norm), 1))
@@ -135,14 +135,14 @@ class CDEMSolver(object):
         beta = self._beta()
         if debug:
             plt.plot(self._omega_lst / (2 * np.pi), np.abs(beta))
-            plt.xlabel('$f$ [Hz]', fontsize=14)
-            plt.ylabel(r'$\beta_{\omega}$', fontsize=14)
+            plt.xlabel('$f$ [Hz]', fontsize=12)
+            plt.ylabel(r'$\beta_{\omega}$', fontsize=12)
             plt.show()
         f = self._f(beta)
         if debug:
             plt.plot(self._omega_lst / (2 * np.pi), np.abs(f))
-            plt.xlabel('$f$ [Hz]', fontsize=14)
-            plt.ylabel(r'$f_{\omega}$', fontsize=14)
+            plt.xlabel('$f$ [Hz]', fontsize=12)
+            plt.ylabel(r'$f_{\omega}$', fontsize=12)
             plt.show()
 
         return self._psi_coherent(f)
