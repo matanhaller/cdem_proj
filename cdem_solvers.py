@@ -2,68 +2,171 @@
 """
 
 import numpy as np
-from scipy.integrate import trapz
-from np.image import convolve1d
+from scipy.integrate import trapezoid
+from scipy.signal import fftconvolve
 from consts import *
+from utils import ctft, ctift
+import matplotlib.pyplot as plt
 
 
 class CDEMSolver(object):
 
-    def __init__(self, v, energy_fwhm):
+    def __init__(self, v, energy_fwhm, F_s, z_max, d_z, L, delta_t_lst):
         self._v = v
         self._sigma_t = hbar / \
-            (energy_fwhm / (2 * np.sqrt(2 * np.log2(2))) * e)
+            (energy_fwhm / (2 * np.sqrt(2 * np.log(2))) * e)
+        self._F_s = F_s
+        self._z_max = z_max
+        self._d_z = d_z
+        self._L = L
 
-        self._z_min = -1
-        self._z_max = 1
-        self._k_z_sample = 1
+        self._d_t = 1 / F_s
+        self._d_omega = 2 * np.pi * F_s / L
 
-        self._t_min = -1
-        self._t_max = 1
-        self._f_sample = 1
+        self._omega_lst = np.arange(-0.5 * self._L, 0.5 * self._L) \
+            * self._d_omega
+        self._t_lst = np.arange(-0.5 * self._L, 0.5 * self._L) * self._d_t
+        self._z_lst = np.arange(-0.5 * self._z_max,
+                                0.5 * self._z_max, self._d_z)
 
-        self._Omega_max = 1
-        self._tau_sample = 1
+        self._delta_t_lst = delta_t_lst
 
-    def __V(self, z, omega):
-        return -1
+    def _V(self, z, omega):
+        return 1
 
-    def __beta(self, z_lst, Omega_lst):
-        WO, Z = np.meshgrid(Omega_lst, z_lst)
-        V_mat = self.__V(Z, WO)
-        C = 1 / (hbar * v)
-        return C * trapz(V_mat * np.exp(1j * T(Omega_lst) * z_lst / self._v),
-                         z_lst, axis=0)
+    def _beta(self):
+        W, Z = np.meshgrid(self._omega_lst, self._z_lst)
+        V_mat = self._V(Z, W)
+        C = 1 / (hbar * self._v)
+        return C * trapezoid(V_mat * np.exp(1j * np.outer(self._z_lst,
+                                                          self._omega_lst)
+                                            / self._v), dx=self._d_z, axis=0)
 
-    def __f(self, t_lst, omega_lst, Omega_lst, beta):
-        f_inner_integrand = np.real(np.exp(1j * T(Omega_lst) * t_lst) * beta)
-        f_inner_integral = trapz(f_inner_integrand, Omega_lst, axis=0)
-        f_integrand = np.exp(1j * (T(omega_lst) * t_lst - T(f_inner_integral)))
+    def _f(self, beta):
+        f_inner_integral = ctift(
+            beta, x_0=self._omega_lst[0], delta_x=self._d_omega, shift=True)
+        f_integrand = np.exp(-1j * f_inner_integral)
+
         C = 1 / (2 * np.pi)
-        return C * trapz(f_integrand, t_lst, axis=0)
+        return C * ctift(f_integrand, x_0=self._t_lst[0],
+                         delta_x=self._d_t, shift=True)
 
-    def __phi_0(self, omega):
-        return 1 / np.sqrt(2 * np.pi * self._sigma_t ** 2)
-        * np.exp(-0.5 * self._sigma_t ** 2 * omega ** 2)
+    def _phi_0(self):
+        return 1 / np.sqrt(2 * np.pi * self._sigma_t ** 2) \
+            * np.exp(-0.5 * self._sigma_t ** 2 * self._omega_lst ** 2)
 
-    def __psi_coherent(self, omega_lst, delta_t_lst, phi_0, f):
-        C = hbar * self._v
-        return C * np.abs(convolve1d(phi0 * exp(-1j * T(delta_t_lst)
-                                                * omega_lst), f,
-                                     mode='constant', axis=1)) ** 2
+    def _psi_coherent(self, f):
+        phi_0 = self._phi_0()
+        exp_d_t = np.exp(-1j * np.outer(self._delta_t_lst, self._omega_lst))
 
-    def solve_coherent(self, omega_lst, delta_t_lst):
-        delta_z = 1 / self._k_z_sample
-        z_lst = np.arange(self._z_min, self._z_max, delta_z)
+        f_rep = np.tile(f, (len(self._delta_t_lst), 1))
 
-        delta_Omega = 1 / self._tau_sample
-        Omega_lst = np.arange(0, self._Omega_max, delta_Omega)
+        psi_coherent = fftconvolve(phi_0 * exp_d_t, f_rep, mode='same', axes=1)
 
-        delta_t = 1 / self._f_sample
-        t_lst = np.arange(self._t_min, self._t_max, delta_t)
+        # Normalizing w.r.t energy (E [eV] = hbar * omega / e)
+        psi_coherent_norm = np.sqrt(trapezoid(np.abs(psi_coherent) ** 2,
+                                              dx=self._d_omega, axis=1)
+                                    * e / hbar)
 
-        beta = self.__beta(z_lst, Omega_lst)
-        f = self.__f(t_lst, omega_lst, Omega_lst, beta)
-        phi_0 = self.__phi_0(omega_lst)
+        return psi_coherent / np.reshape(psi_coherent_norm,
+                                         (len(psi_coherent_norm), 1))
 
-        return self.__psi_coherent(omega_lst, delta_t_lst, phi_0, f)
+    def solve_coherent(self, debug=False):
+
+        beta = self._beta()
+        if debug:
+            plt.plot(self._omega_lst / (2 * np.pi), np.abs(beta))
+            plt.xlabel('$f$ [Hz]', fontsize=14)
+            plt.ylabel(r'$\beta_{\omega}$', fontsize=14)
+            plt.show()
+        f = self._f(beta)
+        if debug:
+            plt.plot(self._omega_lst / (2 * np.pi), np.abs(f))
+            plt.xlabel('$f$ [Hz]', fontsize=14)
+            plt.ylabel(r'$f_{\omega}$', fontsize=14)
+            plt.show()
+
+        return self._psi_coherent(f)
+
+
+class CDEMDipole(CDEMSolver):
+
+    def __init__(self, v, energy_fwhm, F_s, z_max, d_z, L, delta_t_lst,
+                 orientation, d, d_min, N):
+        super().__init__(v, energy_fwhm, F_s, z_max, d_z, L, delta_t_lst)
+        self._orientation = orientation
+        self._d = d
+        self._d_min = d_min
+        self._N = N
+
+    def _X(self, z, omega):
+        if self._orientation == 'z':
+            R_minus = np.sqrt(self._d_min ** 2 + (z - self._d / 2) ** 2)
+            R_plus = np.sqrt(self._d_min ** 2 + (z + self._d / 2) ** 2)
+
+        elif self._orientation == 'xy':
+            R_minus = np.sqrt((self._d_min - self._d / 2) ** 2 + z ** 2)
+            R_plus = np.sqrt((self._d_min + self._d / 2) ** 2 + z ** 2)
+
+        k = omega / c
+
+        return -e ** 2 / (4 * np.pi * epsilon_0) * \
+            (np.exp(1j * k * R_minus)
+                / R_minus - np.exp(1j * k * R_plus) / R_plus)
+
+    def _H(self):
+        return 1
+
+    def _V(self, z, omega):
+        return self._N * self._X(z, omega) * self._H()
+
+
+class CDEMDipoleHarmonic(CDEMDipole):
+
+    def __init__(self, v, energy_fwhm, F_s, z_max, d_z, L, delta_t_lst,
+                 orientation, d, d_min, N, f_d):
+        super().__init__(v, energy_fwhm, F_s, z_max, d_z, L, delta_t_lst,
+                         orientation, d, d_min, N)
+        self._f_d = f_d
+
+    def _H(self):
+        h = np.cos(2 * np.pi * self._f_d * self._t_lst)
+        H = ctft(h, x_0=self._t_lst[0], delta_x=self._d_t, shift=True)
+
+        return H
+
+
+class CDEMDipoleHarmonicGaussian(CDEMDipoleHarmonic):
+
+    def __init__(self, v, energy_fwhm, F_s, z_max, d_z, L, delta_t_lst,
+                 orientation, d, d_min, N, f_d, sigma_d):
+        super().__init__(v, energy_fwhm, F_s, z_max, d_z, L, delta_t_lst,
+                         orientation, d, d_min, N, f_d)
+        self._sigma_d = sigma_d
+
+    def _H(self):
+        h = np.cos(2 * np.pi * self._f_d * self._t_lst) * \
+            np.exp(-0.5 * self._t_lst ** 2 / self._sigma_d ** 2)
+        H = ctft(h, x_0=self._t_lst[0], delta_x=self._d_t, shift=True)
+
+        return H
+
+
+class CDEMDipoleTransient(CDEMDipole):
+
+    def __init__(self, v, energy_fwhm, F_s, z_max, d_z, L, delta_t_lst,
+                 orientation, d, d_min, N, tau_r, tau_d):
+        super().__init__(v, energy_fwhm, F_s, z_max, d_z, L, delta_t_lst,
+                         orientation, d, d_min, N)
+        self._tau_r = tau_r
+        self._tau_d = tau_d
+
+    def _H(self):
+        h = np.zeros((int(self._L),))
+        h[self._t_lst > 0] = (np.exp(-self._t_lst[self._t_lst > 0]
+                                     / self._tau_d) - np.exp(
+            -self._t_lst[self._t_lst > 0] / self._tau_r))
+        h[self._t_lst < 0] = 0
+        H = ctft(h, x_0=self._t_lst[0], delta_x=self._d_t, shift=True)
+
+        return H
